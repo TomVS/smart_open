@@ -63,26 +63,32 @@ def open(uri, mode, kerberos=False, user=None, password=None, cert=None,
         The mode to open using.
     kerberos: boolean, optional
         If True, will attempt to use the local Kerberos credentials
+        Takes precedence over (user, password) authentication or session.auth.
     user: str, optional
         The username for authenticating over HTTP
+        Takes precendence over session.auth when used with password.
     password: str, optional
         The password for authenticating over HTTP
+        Takes precendence over session.auth when used with user.
     cert: str/tuple, optional
         if String, path to ssl client cert file (.pem). If Tuple, (‘cert’, ‘key’)
     headers: dict, optional
         Any headers to send in the request. If ``None``, the default headers are sent:
         ``{'Accept-Encoding': 'identity'}``. To use no headers at all,
         set this variable to an empty dict, ``{}``.
+    timeout: float/tuple, optional
+        How many seconds to wait for the server to send data before giving up,
+        as a float, or a (connect timeout, read timeout) tuple.
     session: object, optional
         The requests Session object to use with http get requests.
-        Can be used for OAuth2 clients.
+        Can be used for OAuth2 clients or other authentication methods with session.auth.
     buffer_size: int, optional
         The buffer size to use when performing I/O.
 
     Note
     ----
     If neither kerberos or (user, password) are set, will connect
-    unauthenticated, unless set separately in headers.
+    unauthenticated, unless set separately in headers or session.auth property.
 
     """
     if mode == constants.READ_BINARY:
@@ -111,6 +117,8 @@ class BufferedInputBase(io.BufferedIOBase):
             auth = requests_kerberos.HTTPKerberosAuth()
         elif user is not None and password is not None:
             auth = (user, password)
+        elif session and session.auth is not None:
+            auth = session.auth
         else:
             auth = None
 
@@ -235,6 +243,8 @@ class SeekableBufferedInputBase(BufferedInputBase):
         If Kerberos is True, will attempt to use the local Kerberos credentials.
         If cert is set, will try to use a client certificate
         Otherwise, will try to use "basic" HTTP authentication via username/password.
+        Finally, if none of the above are provided, but a session object is, and has an
+        an auth property set, will use that for authentication.
 
         If none of those are set, will connect unauthenticated.
         """
@@ -247,6 +257,8 @@ class SeekableBufferedInputBase(BufferedInputBase):
             self.auth = requests_kerberos.HTTPKerberosAuth()
         elif user is not None and password is not None:
             self.auth = (user, password)
+        elif session and session.auth is not None:
+            self.auth = session.auth
         else:
             self.auth = None
 

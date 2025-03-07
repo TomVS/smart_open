@@ -39,6 +39,38 @@ def request_callback(request, headers=HEADERS, data=BYTES):
     return (200, headers, data)
 
 
+def request_callback_digest_auth_flow(request, headers=HEADERS, data=BYTES):
+    """
+    HTTP Digest authentication flow:
+    1. Client sends a request to the server
+    2. Server responds with a 401 Unauthorized response with a WWW-Authenticate header
+    3. Client sends a new request with an Authorization header containing the credentials
+    4. Server responds with a 200 OK response
+
+    Assuming HTTPDigestAuth is used and set in the requests session, the client will automatically
+    handle this, so we just need to simulate the server's responses.
+    """
+    headers = headers.copy()
+    range_string = request.headers.get('range', 'bytes=0-')
+
+    start, end = range_string.replace('bytes=', '', 1).split('-', 1)
+    start = int(start)
+    end = int(end) if end else len(data)
+
+    data = data[start:end]
+    headers['Content-Length'] = str(len(data))
+
+    # Simulate a 401 response on the first request
+    if not hasattr(request_callback, 'called'):
+        headers_401 = {
+            'WWW-Authenticate': 'Digest realm="Digest Realm", nonce="nonce", opaque="opaque"'
+        }
+        request_callback.called = True
+        return (401, headers_401, b'Unauthorized')
+
+    return (200, headers, data)
+
+
 @unittest.skipIf(os.environ.get('TRAVIS'), 'This test does not work on TravisCI for some reason')
 class HttpTest(unittest.TestCase):
 
@@ -167,6 +199,56 @@ class HttpTest(unittest.TestCase):
         assert hasattr(reader, 'session')
         assert reader.session == session
         assert reader.read() == BYTES
+
+    @responses.activate
+    def test_session_auth_attribute(self):
+        session = requests.Session()
+        session.auth = requests.auth.HTTPDigestAuth('user', 'pass')
+        responses.add_callback(responses.GET, URL, callback=request_callback_digest_auth_flow)
+
+        reader = smart_open.open(URL, "rb", transport_params={'session': session})
+
+        assert hasattr(reader, 'session')
+        assert reader.session == session
+        assert reader.session.auth == session.auth
+        assert reader.read() == BYTES
+
+        # Verify that the Authorization header is what we expect
+        assert len(responses.calls) == 2
+        digest_request = responses.calls[1].request
+        auth_header = digest_request.headers.get('Authorization')
+        assert auth_header is not None
+        assert 'Digest' in auth_header
+
+    @responses.activate
+    def test_user_password_override_session_auth(self):
+        session = requests.Session()
+        session.auth = requests.auth.HTTPDigestAuth('user', 'pass')
+        responses.add_callback(responses.GET, URL, callback=request_callback)
+
+        # Provide user and password, which should override session.auth
+        reader = smart_open.open(
+            URL,
+            'rb',
+            transport_params={
+                'user': 'new_user',
+                'password': 'new_pass',
+                'session': session,
+            },
+        )
+
+        assert hasattr(reader, 'session')
+        assert reader.session == session
+        assert reader.auth == ('new_user', 'new_pass')
+        assert reader.read() == BYTES
+
+        # Verify that the Authorization header is what we expect
+        assert len(responses.calls) == 1
+        basic_request = responses.calls[0].request
+        auth_header = basic_request.headers.get('Authorization')
+        assert auth_header is not None
+        assert 'Digest' not in auth_header  # Should not be using Digest auth
+        assert 'Basic' in auth_header  # Should be using Basic auth
 
 
 @responses.activate
